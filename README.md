@@ -1,4 +1,4 @@
-# ComfyUI-FaceFusion
+﻿# ComfyUI-FaceFusion
 
 ComfyUI custom nodes for face swapping using FaceFusion.
 
@@ -60,3 +60,7 @@ Copy to ComfyUI/custom_nodes/ComfyUI-FaceFusion/ and restart ComfyUI.
 
 ## Models
 Model files in .assets/models/. Downloaded automatically on first use, or copy from existing FaceFusion installation.
+
+## Credits
+- [FaceFusion](https://github.com/facefusion/facefusion) - Core face swap engine
+- Built with [Codex](https://codex.ai) - AI-powered coding agent
