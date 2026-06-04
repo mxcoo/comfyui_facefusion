@@ -1,0 +1,11 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# FaceFusion models (large ONNX files, downloaded separately)
+.assets/models/
+
+# FaceFusion source
+facefusion/
+!facefusion/__init__.py
