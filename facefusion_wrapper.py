@@ -1,6 +1,7 @@
-import os
+﻿import os
 import sys
 import logging
+
 import numpy as np
 import cv2
 import torch
@@ -12,6 +13,24 @@ sys.path.insert(0, FF_DIR)
 
 import facefusion
 from facefusion import state_manager
+
+
+def _ensure_cuda_provider():
+    """Verify onnxruntime can see CUDAExecutionProvider and log result."""
+    import onnxruntime as _ort
+    available = _ort.get_available_providers()
+    has_cuda = "CUDAExecutionProvider" in available
+    log.info("onnxruntime %s available providers: %s | CUDA available: %s",
+             _ort.__version__, available, has_cuda)
+    if not has_cuda:
+        log.warning(
+            "CUDAExecutionProvider NOT found in onnxruntime providers.\n"
+            "  This means inference will fall back to CPU.\n"
+            "  If torch sees CUDA (%s), you may need:\n"
+            "    1. `pip uninstall onnxruntime -y` (remove CPU-only version)\n"
+            "    2. `pip install onnxruntime-gpu[cuda]==1.26.0`\n"
+            "    3. Restart ComfyUI",
+            __import__("torch").cuda.is_available())
 
 def tensor_to_vision_frame(tensor):
     img = tensor.cpu().numpy().squeeze(0)
@@ -26,6 +45,8 @@ def vision_frame_to_tensor(frame):
     return torch.from_numpy(img).unsqueeze(0)
 
 def init_facefusion_state():
+    _ensure_cuda_provider()
+
     state_manager.init_item("execution_providers", ["cuda"])
     state_manager.init_item("execution_device_ids", [0])
     state_manager.init_item("execution_thread_count", 4)
@@ -162,6 +183,15 @@ def process_faces(source_tensor, target_tensor, **kwargs):
 
     proc_list = ["face_swapper", "face_enhancer"]
     state_manager.set_item("processors", proc_list)
+
+    # Force CUDA providers right before processing
+    ep_str = kwargs.get("execution_providers", "cuda")
+    providers = [p.strip() for p in ep_str.split(",") if p.strip()]
+    state_manager.set_item("execution_providers", providers)
+    state_manager.set_item("execution_device_ids", [0])
+    log.info("Forced execution_providers=%s | onnxruntime available providers: %s",
+             providers,
+             __import__("onnxruntime").get_available_providers())
 
     source_frame = tensor_to_vision_frame(source_tensor)
     target_frame = tensor_to_vision_frame(target_tensor)

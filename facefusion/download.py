@@ -13,11 +13,33 @@ from facefusion.hash_helper import validate_hash
 from facefusion.types import Command, DownloadProvider, DownloadSet
 
 
-def open_curl(commands : List[Command]) -> subprocess.Popen[bytes]:
-	commands = curl_builder.run(commands)
-	return subprocess.Popen(commands, stdin = subprocess.PIPE, stdout = subprocess.PIPE)
-
-
+def open_curl(commands):
+    """Execute curl command, gracefully handling missing curl binary."""
+    import shutil
+    import sys as _sys
+    curl_path = shutil.which('curl')
+    if not curl_path:
+        logger.warn('curl not found on PATH - model download/verification skipped', __name__)
+        try:
+            return subprocess.Popen(
+                [_sys.executable, '-c', 'import sys; sys.exit(1)'],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+        except Exception:
+            class FakeProcess:
+                returncode = 1
+                def communicate(self):
+                    return (b'', b'')
+                @property
+                def stdout(self):
+                    return FakeStdout()
+            class FakeStdout:
+                def readlines(self):
+                    return [b'']
+            return FakeProcess()
+    from facefusion.curl_builder import run as curl_run
+    cmds = curl_run(commands)
+    return subprocess.Popen(cmds, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 def conditional_download(download_directory_path : str, urls : List[str]) -> None:
 	for url in urls:
 		download_file_name = os.path.basename(urlparse(url).path)

@@ -1,5 +1,6 @@
-import time
+﻿import time
 import logging
+import os
 import torch
 from fractions import Fraction
 
@@ -35,6 +36,9 @@ def configure_state(**kwargs):
         elif key == "face_enhancer_blend": state_manager.set_item("face_enhancer_blend", int(val))
         elif key == "face_enhancer_weight": state_manager.set_item("face_enhancer_weight", float(val))
     state_manager.set_item("processors", ["face_swapper", "face_enhancer"])
+    log.info("configure_state done | execution_providers=%s | onnxruntime available: %s",
+             state_manager.get_item("execution_providers"),
+             __import__("onnxruntime").get_available_providers())
 
 
 class FaceFusionVideoSwapNode:
@@ -74,7 +78,7 @@ class FaceFusionVideoSwapNode:
         from facefusion_wrapper import tensor_to_vision_frame, vision_frame_to_tensor, apply_face_swapper, apply_face_enhancer
         from comfy_api.latest import Types, InputImpl
 
-        # Get frames from ComfyUI's video object
+        # Get frames from ComfyUI video object
         vc = target_video.get_components() if hasattr(target_video, "get_components") else target_video
         frames = vc.images if hasattr(vc, "images") else target_video
         audio = vc.audio if hasattr(vc, "audio") else None
