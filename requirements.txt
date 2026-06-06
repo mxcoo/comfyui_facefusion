@@ -1,12 +1,14 @@
-﻿# requirements.txt for ComfyUI-FaceFusion
+# requirements.txt for ComfyUI-FaceFusion
 # onnxruntime-gpu with CUDA support is required for GPU-accelerated face swapping
+# Install with CUDA support:
+#   pip install "onnxruntime-gpu[cuda]==1.26.0"
 
-# Core dependency — install with CUDA support:
-#   pip install "onnxruntime-gpu[cuda]==1.26.0"
-#
-# If you see CPU-only inference after installation, make sure the CPU-only
-# `onnxruntime` package is NOT installed:
-#   pip uninstall onnxruntime -y
-#
-# Then reinstall the GPU version:
-#   pip install "onnxruntime-gpu[cuda]==1.26.0"
+# Core dependencies
+onnxruntime-gpu>=1.26.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+torch>=2.0.0
+tqdm>=4.64.0
+
+# Video processing & model download (optional but recommended)
+ffmpeg-python>=0.2.0

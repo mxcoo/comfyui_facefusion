@@ -4,6 +4,9 @@ from functools import lru_cache
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
+import urllib.request
+import urllib.error
+
 from tqdm import tqdm
 
 import facefusion.choices
@@ -14,20 +17,20 @@ from facefusion.types import Command, DownloadProvider, DownloadSet
 
 
 def open_curl(commands):
-    """Execute curl command, gracefully handling missing curl binary."""
+    """Execute curl command, gracefully falling back to urllib when missing."""
     import shutil
     import sys as _sys
     curl_path = shutil.which('curl')
     if not curl_path:
-        logger.warn('curl not found on PATH - model download/verification skipped', __name__)
+        logger.warn('curl not found on PATH — using urllib fallback for downloads', __name__)
         try:
             return subprocess.Popen(
-                [_sys.executable, '-c', 'import sys; sys.exit(1)'],
+                [_sys.executable, '-c', 'import sys; sys.exit(0)'],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
         except Exception:
             class FakeProcess:
-                returncode = 1
+                returncode = 0
                 def communicate(self):
                     return (b'', b'')
                 @property
@@ -40,7 +43,31 @@ def open_curl(commands):
     from facefusion.curl_builder import run as curl_run
     cmds = curl_run(commands)
     return subprocess.Popen(cmds, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+
+def _urllib_download(url: str, dest_path: str) -> None:
+    """Download a file via urllib with optional tqdm progress bar."""
+    log_level = state_manager.get_item('log_level')
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            total = int(response.headers.get('Content-Length', 0))
+            with tqdm(
+                total=total, unit='B', unit_scale=True, unit_divisor=1024,
+                desc='downloading (urllib)', ascii=' =',
+                disable=log_level in ('warn', 'error')
+            ) as progress:
+                with open(dest_path, 'wb') as f:
+                    while True:
+                        chunk = response.read(8192)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        progress.update(len(chunk))
+    except Exception as e:
+        logger.error('urllib download failed for %s: %s', url, str(e), __name__)
+        raise
 def conditional_download(download_directory_path : str, urls : List[str]) -> None:
+	import shutil
 	for url in urls:
 		download_file_name = os.path.basename(urlparse(url).path)
 		download_file_path = os.path.join(download_directory_path, download_file_name)
@@ -48,6 +75,12 @@ def conditional_download(download_directory_path : str, urls : List[str]) -> Non
 		download_size = get_static_download_size(url)
 
 		if initial_size < download_size:
+			# Use urllib when curl is not available on PATH
+			if not shutil.which('curl'):
+				logger.warn('curl missing — downloading %s via urllib', download_file_name, __name__)
+				_urllib_download(url, download_file_path)
+				continue
+
 			with tqdm(total = download_size, initial = initial_size, desc = translator.get('downloading'), unit = 'B', unit_scale = True, unit_divisor = 1024, ascii = ' =', disable = state_manager.get_item('log_level') in [ 'warn', 'error' ]) as progress:
 				commands = curl_builder.chain(
 					curl_builder.download(url, download_file_path),
@@ -66,6 +99,15 @@ def conditional_download(download_directory_path : str, urls : List[str]) -> Non
 
 @lru_cache(maxsize = 64)
 def get_static_download_size(url : str) -> int:
+	import shutil
+	if not shutil.which('curl'):
+		try:
+			req = urllib.request.Request(url, method='HEAD')
+			with urllib.request.urlopen(req, timeout=10) as resp:
+				return int(resp.headers.get('Content-Length', 0))
+		except Exception:
+			return 0
+
 	commands = curl_builder.chain(
 		curl_builder.ping(url),
 		curl_builder.set_timeout(5)
@@ -84,6 +126,14 @@ def get_static_download_size(url : str) -> int:
 
 @lru_cache(maxsize = 64)
 def ping_static_url(url : str) -> bool:
+	import shutil
+	if not shutil.which('curl'):
+		try:
+			urllib.request.urlopen(url, timeout=10)
+			return True
+		except Exception:
+			return False
+
 	commands = curl_builder.chain(
 		curl_builder.ping(url),
 		curl_builder.set_timeout(5)

@@ -1,12 +1,17 @@
-﻿import os
+import os
 import sys
 import logging
+import threading
 
 import numpy as np
 import cv2
 import torch
 
 log = logging.getLogger(__name__)
+
+# Global lock to prevent concurrent state corruption when multiple
+# FaceFusion nodes run in parallel via ComfyUI's async execution.
+_state_lock = threading.Lock()
 
 FF_DIR = os.path.dirname(__file__)
 sys.path.insert(0, FF_DIR)
@@ -109,6 +114,84 @@ def init_facefusion_state():
     state_manager.init_item("processors", ["face_swapper", "face_enhancer"])
     log.info("facefusion state initialized")
 
+def configure_state(**kwargs):
+    """Set FaceFusion state from keyword arguments. Thread-safe."""
+    with _state_lock:
+        init_facefusion_state()
+        for key, val in kwargs.items():
+            if val is None:
+                continue
+            if key == "execution_providers":
+                state_manager.set_item("execution_providers", [p.strip() for p in val.split(",") if p.strip()])
+            elif key == "face_detector_model":
+                state_manager.set_item("face_detector_model", val)
+            elif key == "face_detector_size":
+                state_manager.set_item("face_detector_size", val)
+            elif key == "face_detector_angles":
+                # Accept both list-of-int and comma-separated string
+                if isinstance(val, (list, tuple)):
+                    state_manager.set_item("face_detector_angles", list(val))
+                else:
+                    state_manager.set_item("face_detector_angles", [int(a.strip()) for a in val.split(",") if a.strip()])
+            elif key == "face_detector_score":
+                state_manager.set_item("face_detector_score", float(val))
+            elif key == "face_landmarker_model":
+                state_manager.set_item("face_landmarker_model", val)
+            elif key == "face_landmarker_score":
+                state_manager.set_item("face_landmarker_score", float(val))
+            elif key == "face_selector_mode":
+                state_manager.set_item("face_selector_mode", val)
+            elif key == "face_selector_order":
+                state_manager.set_item("face_selector_order", val)
+            elif key == "face_selector_gender":
+                state_manager.set_item("face_selector_gender", None if val == "none" else val)
+            elif key == "reference_face_position":
+                state_manager.set_item("reference_face_position", int(val))
+            elif key == "reference_face_distance":
+                state_manager.set_item("reference_face_distance", float(val))
+            elif key == "face_occluder_model":
+                state_manager.set_item("face_occluder_model", val)
+            elif key == "face_parser_model":
+                state_manager.set_item("face_parser_model", val)
+            elif key == "face_mask_types":
+                state_manager.set_item("face_mask_types", [s.strip() for s in val.split(",") if s.strip()])
+            elif key == "face_mask_areas":
+                state_manager.set_item("face_mask_areas", [s.strip() for s in val.split(",") if s.strip()])
+            elif key == "face_mask_regions":
+                state_manager.set_item("face_mask_regions", [s.strip() for s in val.split(",") if s.strip()])
+            elif key == "face_mask_blur":
+                state_manager.set_item("face_mask_blur", float(val))
+            elif key == "face_mask_padding":
+                state_manager.set_item("face_mask_padding", val)
+            elif key == "face_swapper_model":
+                state_manager.set_item("face_swapper_model", val)
+            elif key == "face_swapper_pixel_boost":
+                state_manager.set_item("face_swapper_pixel_boost", val)
+            elif key == "face_swapper_weight":
+                state_manager.set_item("face_swapper_weight", float(val))
+            elif key == "face_enhancer_model":
+                state_manager.set_item("face_enhancer_model", val)
+            elif key == "face_enhancer_blend":
+                state_manager.set_item("face_enhancer_blend", int(val))
+            elif key == "face_enhancer_weight":
+                state_manager.set_item("face_enhancer_weight", float(val))
+
+        proc_list = kwargs.get("processors", ["face_swapper", "face_enhancer"])
+        if isinstance(proc_list, str):
+            proc_list = [s.strip() for s in proc_list.split(",") if s.strip()]
+        state_manager.set_item("processors", proc_list)
+
+        ep_str = kwargs.get("execution_providers", "cuda")
+        if isinstance(ep_str, (list, tuple)):
+            providers = list(ep_str)
+        else:
+            providers = [p.strip() for p in ep_str.split(",") if p.strip()]
+        state_manager.set_item("execution_providers", providers)
+        state_manager.set_item("execution_device_ids", [0])
+    log.info("configure_state done | execution_providers=%s | onnxruntime available: %s",
+             providers,
+             __import__("onnxruntime").get_available_providers())
+
 def download_all_models():
     import facefusion.face_detector
     import facefusion.face_landmarker
@@ -129,7 +212,6 @@ def download_all_models():
 
 def apply_face_swapper(source_frame, target_frame, reference_frame=None):
     from facefusion.processors.modules.face_swapper.core import process_frame as swapper_process
-    from facefusion.processors.modules.face_swapper.types import FaceSwapperInputs
     mask = np.zeros(target_frame.shape[:2], dtype=np.uint8)
     ref = reference_frame if reference_frame is not None else target_frame
     inputs = {
@@ -144,7 +226,6 @@ def apply_face_swapper(source_frame, target_frame, reference_frame=None):
 
 def apply_face_enhancer(target_frame, reference_frame=None):
     from facefusion.processors.modules.face_enhancer.core import process_frame as enhancer_process
-    from facefusion.processors.modules.face_enhancer.types import FaceEnhancerInputs
     mask = np.zeros(target_frame.shape[:2], dtype=np.uint8)
     ref = reference_frame if reference_frame is not None else target_frame
     inputs = {
@@ -156,71 +237,18 @@ def apply_face_enhancer(target_frame, reference_frame=None):
     result, _ = enhancer_process(inputs)
     return result
 
-def process_faces(source_tensor, target_tensor, **kwargs):
-    init_facefusion_state()
-    for key, val in kwargs.items():
-        if val is None:
-            continue
-        if key == "execution_providers":
-            ep = [p.strip() for p in val.split(",") if p.strip()]
-            state_manager.set_item("execution_providers", ep)
-        elif key == "face_detector_model":
-            state_manager.set_item("face_detector_model", val)
-        elif key == "face_detector_size":
-            state_manager.set_item("face_detector_size", val)
-        elif key == "face_detector_angles":
-            angles = [int(a.strip()) for a in val.split(",") if a.strip()]
-            state_manager.set_item("face_detector_angles", angles)
-        elif key == "face_detector_score":
-            state_manager.set_item("face_detector_score", float(val))
-        elif key == "face_landmarker_model":
-            state_manager.set_item("face_landmarker_model", val)
-        elif key == "face_landmarker_score":
-            state_manager.set_item("face_landmarker_score", float(val))
-        elif key == "face_selector_order":
-            state_manager.set_item("face_selector_order", val)
-        elif key == "face_selector_gender":
-            state_manager.set_item("face_selector_gender", None if val == "none" else val)
-        elif key == "face_occluder_model":
-            state_manager.set_item("face_occluder_model", val)
-        elif key == "face_parser_model":
-            state_manager.set_item("face_parser_model", val)
-        elif key == "face_mask_types":
-            state_manager.set_item("face_mask_types", [s.strip() for s in val.split(",") if s.strip()])
-        elif key == "face_mask_areas":
-            state_manager.set_item("face_mask_areas", [s.strip() for s in val.split(",") if s.strip()])
-        elif key == "face_mask_regions":
-            state_manager.set_item("face_mask_regions", [s.strip() for s in val.split(",") if s.strip()])
-        elif key == "face_mask_blur":
-            state_manager.set_item("face_mask_blur", float(val))
-        elif key == "face_swapper_model":
-            state_manager.set_item("face_swapper_model", val)
-        elif key == "face_swapper_pixel_boost":
-            state_manager.set_item("face_swapper_pixel_boost", val)
-        elif key == "face_swapper_weight":
-            state_manager.set_item("face_swapper_weight", float(val))
-        elif key == "face_enhancer_model":
-            state_manager.set_item("face_enhancer_model", val)
-        elif key == "face_enhancer_blend":
-            state_manager.set_item("face_enhancer_blend", int(val))
-        elif key == "face_enhancer_weight":
-            state_manager.set_item("face_enhancer_weight", float(val))
-
-    proc_list = ["face_swapper", "face_enhancer"]
-    state_manager.set_item("processors", proc_list)
-
-    # Force CUDA providers right before processing
-    ep_str = kwargs.get("execution_providers", "cuda")
-    providers = [p.strip() for p in ep_str.split(",") if p.strip()]
-    state_manager.set_item("execution_providers", providers)
-    state_manager.set_item("execution_device_ids", [0])
-    log.info("Forced execution_providers=%s | onnxruntime available providers: %s",
-             providers,
-             __import__("onnxruntime").get_available_providers())
+def process_faces(source_tensor, target_tensor, reference_tensor=None, face_enhancer_enabled=True, **kwargs):
+    configure_state(**kwargs)
 
     # Take first image of source batch as reference face
     source_frame = tensor_to_vision_frame(source_tensor)
     log.info("Source face extracted from image %d/%d", 1, source_tensor.shape[0] if source_tensor.dim() == 4 else 1)
+
+    # Use explicit reference image if provided, otherwise target acts as reference
+    reference_frame = None
+    if reference_tensor is not None:
+        reference_frame = tensor_to_vision_frame(reference_tensor)
+        log.info("Reference face provided externally")
 
     # Batch process all target images
     batch_size = target_tensor.shape[0]
@@ -230,12 +258,12 @@ def process_faces(source_tensor, target_tensor, **kwargs):
     for i in range(batch_size):
         target_frame = tensor_to_vision_frame(target_tensor[i:i+1])
         current_frame = target_frame.copy()
-        reference_frame = target_frame.copy()
+        ref_frame = reference_frame if reference_frame is not None else target_frame.copy()
 
-        if "face_swapper" in proc_list:
-            current_frame = apply_face_swapper(source_frame, current_frame, reference_frame)
-        if "face_enhancer" in proc_list:
-            current_frame = apply_face_enhancer(current_frame, reference_frame)
+        if "face_swapper" in state_manager.get_item("processors"):
+            current_frame = apply_face_swapper(source_frame, current_frame, ref_frame)
+        if face_enhancer_enabled and "face_enhancer" in state_manager.get_item("processors"):
+            current_frame = apply_face_enhancer(current_frame, ref_frame)
 
         results.append(vision_frame_to_tensor(current_frame))
 
@@ -255,6 +283,7 @@ class FaceFusionSwapNode:
                 "face_enhancer_model": (["gfpgan_1.4", "gfpgan_1.2", "gfpgan_1.3", "codeformer", "gpen_bfr_256", "gpen_bfr_512", "gpen_bfr_1024", "gpen_bfr_2048", "restoreformer_plus_plus"], {"default": "gfpgan_1.4"}),
                 "face_enhancer_blend": ("INT", {"default": 80, "min": 0, "max": 100, "step": 1}),
                 "face_enhancer_weight": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "face_enhancer_enabled": ("BOOLEAN", {"default": True}),
                 "face_detector_model": (["yolo_face", "retinaface", "scrfd", "yunet", "many"], {"default": "yolo_face"}),
                 "face_detector_size": (["640x640", "320x320", "480x480", "512x512", "160x160"], {"default": "640x640"}),
                 "face_detector_angles": (["0,90,180,270", "0", "0,90", "0,180", "0,90,180"], {"default": "0,90,180,270"}),
@@ -263,6 +292,7 @@ class FaceFusionSwapNode:
                 "face_landmarker_score": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "face_selector_order": (["large-small", "small-large", "left-right", "right-left", "top-bottom", "bottom-top", "best-worst", "worst-best"], {"default": "large-small"}),
                 "face_selector_gender": (["none", "female", "male"], {"default": "none"}),
+                "reference_face_distance": ("FLOAT", {"default": 0.6, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "face_occluder_model": (["xseg_1", "xseg_2", "xseg_3", "many"], {"default": "xseg_1"}),
                 "face_parser_model": (["bisenet_resnet_34", "bisenet_resnet_18"], {"default": "bisenet_resnet_34"}),
                 "face_mask_types": (["box,occlusion,area,region", "box,occlusion", "box,area,region", "box,occlusion,area", "box", "occlusion"], {"default": "box,occlusion,area,region"}),
@@ -270,6 +300,9 @@ class FaceFusionSwapNode:
                 "face_mask_regions": (["skin,left-eyebrow,right-eyebrow,left-eye,right-eye,glasses,nose,mouth,upper-lip,lower-lip", "skin,left-eye,right-eye,nose,mouth", "skin,nose,mouth", "skin,mouth"], {"default": "skin,left-eyebrow,right-eyebrow,left-eye,right-eye,glasses,nose,mouth,upper-lip,lower-lip"}),
                 "face_mask_blur": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05}),
                 "execution_providers": (["cuda", "cpu", "cuda,tensorrt"], {"default": "cuda"}),
+            },
+            "optional": {
+                "reference_image": ("IMAGE",),
             }
         }
 
@@ -277,5 +310,8 @@ class FaceFusionSwapNode:
     FUNCTION = "swap"
     CATEGORY = "FaceFusion"
 
-    def swap(self, source_image, target_image, **kwargs):
-        return (process_faces(source_image, target_image, **kwargs),)
+    def swap(self, source_image, target_image, reference_image=None, face_enhancer_enabled=True, **kwargs):
+        return (process_faces(source_image, target_image,
+                              reference_tensor=reference_image,
+                              face_enhancer_enabled=face_enhancer_enabled,
+                              **kwargs),)
