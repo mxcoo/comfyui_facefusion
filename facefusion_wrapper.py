@@ -33,16 +33,41 @@ def _ensure_cuda_provider():
             __import__("torch").cuda.is_available())
 
 def tensor_to_vision_frame(tensor):
-    img = tensor.cpu().numpy().squeeze(0)
+    """Convert image tensor (B, H, W, 3) or (1, H, W, 3) to OpenCV BGR frame (H, W, 3). Uses first image in batch."""
+    if tensor.dim() == 4:
+        img = tensor[0]
+    else:
+        img = tensor
+    img = img.cpu().numpy()
     img = np.clip(img, 0.0, 1.0)
     img = (img * 255.0).astype(np.uint8)
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     return img
 
 def vision_frame_to_tensor(frame):
+    """Convert single OpenCV BGR frame (H, W, 3) to image tensor (1, H, W, 3)."""
     img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     img = img.astype(np.float32) / 255.0
     return torch.from_numpy(img).unsqueeze(0)
+
+def tensors_to_vision_frames(tensor):
+    """Convert batch tensor (B, H, W, 3) to list of OpenCV BGR frames (H, W, 3)."""
+    imgs = tensor.cpu().numpy()
+    imgs = np.clip(imgs, 0.0, 1.0)
+    imgs = (imgs * 255.0).astype(np.uint8)
+    results = []
+    for img in imgs:
+        results.append(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    return results
+
+def vision_frames_to_tensor(frames):
+    """Convert list of OpenCV BGR frames (H, W, 3) to batch tensor (B, H, W, 3)."""
+    imgs = []
+    for frame in frames:
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img = img.astype(np.float32) / 255.0
+        imgs.append(torch.from_numpy(img))
+    return torch.stack(imgs, dim=0)
 
 def init_facefusion_state():
     _ensure_cuda_provider()
@@ -193,19 +218,28 @@ def process_faces(source_tensor, target_tensor, **kwargs):
              providers,
              __import__("onnxruntime").get_available_providers())
 
+    # Take first image of source batch as reference face
     source_frame = tensor_to_vision_frame(source_tensor)
-    target_frame = tensor_to_vision_frame(target_tensor)
-    current_frame = target_frame.copy()
-    reference_frame = target_frame.copy()
+    log.info("Source face extracted from image %d/%d", 1, source_tensor.shape[0] if source_tensor.dim() == 4 else 1)
 
-    if "face_swapper" in proc_list:
-        log.info("Running face_swapper...")
-        current_frame = apply_face_swapper(source_frame, current_frame, reference_frame)
-    if "face_enhancer" in proc_list:
-        log.info("Running face_enhancer...")
-        current_frame = apply_face_enhancer(current_frame, reference_frame)
+    # Batch process all target images
+    batch_size = target_tensor.shape[0]
+    log.info("Processing batch of %d target images...", batch_size)
+    results = []
 
-    return vision_frame_to_tensor(current_frame)
+    for i in range(batch_size):
+        target_frame = tensor_to_vision_frame(target_tensor[i:i+1])
+        current_frame = target_frame.copy()
+        reference_frame = target_frame.copy()
+
+        if "face_swapper" in proc_list:
+            current_frame = apply_face_swapper(source_frame, current_frame, reference_frame)
+        if "face_enhancer" in proc_list:
+            current_frame = apply_face_enhancer(current_frame, reference_frame)
+
+        results.append(vision_frame_to_tensor(current_frame))
+
+    return torch.cat(results, dim=0)
 
 
 class FaceFusionSwapNode:
