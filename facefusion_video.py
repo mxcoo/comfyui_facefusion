@@ -12,13 +12,16 @@ log = logging.getLogger(__name__)
 from facefusion_wrapper import configure_state, tensor_to_vision_frame, vision_frame_to_tensor, apply_face_swapper, apply_face_enhancer
 
 
-def _one_frame(frame_bgr, src_bgr, ref_bgr, enh_enabled):
+def _one_frame(frame_bgr, src_bgr, ref_bgr, enh_enabled, expression_enabled):
     """Process a single frame — picklable for ThreadPoolExecutor."""
     c = frame_bgr.copy()
     r = ref_bgr if ref_bgr is not None else frame_bgr.copy()
     c = apply_face_swapper(src_bgr, c, r)
     if enh_enabled:
         c = apply_face_enhancer(c, r)
+    if expression_enabled:
+        from facefusion_wrapper import apply_expression_restorer as _apply_er
+        c = _apply_er(c, r)
     return c
 
 
@@ -51,6 +54,10 @@ class FaceFusionVideoSwapNode:
                 "face_mask_areas": (["upper-face,lower-face,mouth","upper-face,lower-face","upper-face,mouth","lower-face"], {"default":"upper-face,lower-face,mouth"}),
                 "face_mask_regions": (["skin,left-eyebrow,right-eyebrow,left-eye,right-eye,glasses,nose,mouth,upper-lip,lower-lip","skin,left-eye,right-eye,nose,mouth","skin,nose,mouth","skin,mouth"], {"default":"skin,left-eyebrow,right-eyebrow,left-eye,right-eye,glasses,nose,mouth,upper-lip,lower-lip"}),
                 "face_mask_blur": ("FLOAT", {"default":0.3,"min":0.0,"max":1.0,"step":0.05}),
+                "expression_restorer_enabled": ("BOOLEAN", {"default": False}),
+                "expression_restorer_model": (["live_portrait"], {"default":"live_portrait"}),
+                "expression_restorer_factor": ("INT", {"default":80,"min":0,"max":100,"step":1}),
+                "expression_restorer_areas": (["upper-face,lower-face","upper-face","lower-face"], {"default":"upper-face,lower-face"}),
                 "execution_providers": (["cuda","cpu","cuda,tensorrt"], {"default":"cuda"}),
                 "thread_count": ("INT", {"default": 2, "min": 1, "max": 4}),
             },
@@ -64,7 +71,8 @@ class FaceFusionVideoSwapNode:
     CATEGORY = "FaceFusion"
 
     def process(self, source_images, target_video, reference_image=None,
-                face_enhancer_enabled=False, thread_count=2, **kwargs):
+                face_enhancer_enabled=False, expression_restorer_enabled=False,
+                thread_count=2, **kwargs):
         from comfy_api.latest import Types, InputImpl
 
         # Get frames from ComfyUI video object
@@ -73,6 +81,14 @@ class FaceFusionVideoSwapNode:
         audio = vc.audio if hasattr(vc, "audio") else None
         fr_val = float(vc.frame_rate) if hasattr(vc, "frame_rate") and vc.frame_rate else 30.0
 
+        # Build processors list based on enabled features
+        from facefusion_wrapper import configure_state
+        proc_list = ['face_swapper']
+        if face_enhancer_enabled:
+            proc_list.append('face_enhancer')
+        if expression_restorer_enabled:
+            proc_list.append('expression_restorer')
+        kwargs['processors'] = proc_list
         configure_state(**kwargs)
 
         src = source_images[0:1] if source_images.dim() == 4 and source_images.shape[0] > 1 else source_images
@@ -103,7 +119,7 @@ class FaceFusionVideoSwapNode:
             results = []
             for i in range(batch):
                 f_bgr = tensor_to_vision_frame(frames[i].unsqueeze(0))
-                c = _one_frame(f_bgr, src_bgr, ref_bgr, face_enhancer_enabled)
+                c = _one_frame(f_bgr, src_bgr, ref_bgr, face_enhancer_enabled, expression_restorer_enabled)
                 results.append(vision_frame_to_tensor(c))
                 if (i + 1) % 30 == 0 or i == batch - 1:
                     e = time.time() - start
@@ -113,7 +129,7 @@ class FaceFusionVideoSwapNode:
         else:
             # Multi-threaded path
             frame_bgrs = [tensor_to_vision_frame(frames[i].unsqueeze(0)) for i in range(batch)]
-            worker = partial(_one_frame, src_bgr=src_bgr, ref_bgr=ref_bgr, enh_enabled=face_enhancer_enabled)
+            worker = partial(_one_frame, src_bgr=src_bgr, ref_bgr=ref_bgr, enh_enabled=face_enhancer_enabled, expression_enabled=expression_restorer_enabled)
             with ThreadPoolExecutor(max_workers=thread_count) as ex:
                 out_frames = list(ex.map(worker, frame_bgrs))
             results = [vision_frame_to_tensor(f) for f in out_frames]

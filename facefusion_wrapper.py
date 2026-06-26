@@ -106,6 +106,9 @@ def init_facefusion_state():
     state_manager.init_item("face_enhancer_model", "gfpgan_1.4")
     state_manager.init_item("face_enhancer_blend", 80)
     state_manager.init_item("face_enhancer_weight", 0.5)
+    state_manager.init_item("expression_restorer_model", "live_portrait")
+    state_manager.init_item("expression_restorer_factor", 80)
+    state_manager.init_item("expression_restorer_areas", ["upper-face", "lower-face"])
     state_manager.init_item("video_memory_strategy", "moderate")
     state_manager.init_item("source_paths", [])
     state_manager.init_item("target_path", None)
@@ -175,6 +178,12 @@ def configure_state(**kwargs):
                 state_manager.set_item("face_enhancer_blend", int(val))
             elif key == "face_enhancer_weight":
                 state_manager.set_item("face_enhancer_weight", float(val))
+            elif key == "expression_restorer_model":
+                state_manager.set_item("expression_restorer_model", val)
+            elif key == "expression_restorer_factor":
+                state_manager.set_item("expression_restorer_factor", int(val))
+            elif key == "expression_restorer_areas":
+                state_manager.set_item("expression_restorer_areas", [s.strip() for s in val.split(",") if s.strip()])
 
         proc_list = kwargs.get("processors", ["face_swapper", "face_enhancer"])
         if isinstance(proc_list, str):
@@ -236,6 +245,22 @@ def apply_face_enhancer(target_frame, reference_frame=None):
     }
     result, _ = enhancer_process(inputs)
     return result
+
+
+def apply_expression_restorer(target_frame, reference_frame=None):
+    from facefusion.processors.modules.expression_restorer.core import process_frame as restorer_process
+    mask = __import__("numpy").zeros(target_frame.shape[:2], dtype=__import__("numpy").uint8)
+    ref = reference_frame if reference_frame is not None else target_frame
+    inputs = {
+        "reference_vision_frame": ref,
+        "source_vision_frames": [ref],
+        "target_vision_frame": target_frame,
+        "temp_vision_frame": target_frame.copy(),
+        "temp_vision_mask": mask
+    }
+    result, _ = restorer_process(inputs)
+    return result
+
 
 def process_faces(source_tensor, target_tensor, reference_tensor=None, face_enhancer_enabled=True, **kwargs):
     configure_state(**kwargs)
@@ -299,6 +324,10 @@ class FaceFusionSwapNode:
                 "face_mask_areas": (["upper-face,lower-face,mouth", "upper-face,lower-face", "upper-face,mouth", "lower-face"], {"default": "upper-face,lower-face,mouth"}),
                 "face_mask_regions": (["skin,left-eyebrow,right-eyebrow,left-eye,right-eye,glasses,nose,mouth,upper-lip,lower-lip", "skin,left-eye,right-eye,nose,mouth", "skin,nose,mouth", "skin,mouth"], {"default": "skin,left-eyebrow,right-eyebrow,left-eye,right-eye,glasses,nose,mouth,upper-lip,lower-lip"}),
                 "face_mask_blur": ("FLOAT", {"default": 0.3, "min": 0.0, "max": 1.0, "step": 0.05}),
+                "expression_restorer_enabled": ("BOOLEAN", {"default": False}),
+                "expression_restorer_model": (["live_portrait"], {"default": "live_portrait"}),
+                "expression_restorer_factor": ("INT", {"default": 80, "min": 0, "max": 100, "step": 1}),
+                "expression_restorer_areas": (["upper-face,lower-face", "upper-face", "lower-face"], {"default": "upper-face,lower-face"}),
                 "execution_providers": (["cuda", "cpu", "cuda,tensorrt"], {"default": "cuda"}),
             },
             "optional": {
@@ -310,7 +339,15 @@ class FaceFusionSwapNode:
     FUNCTION = "swap"
     CATEGORY = "FaceFusion"
 
-    def swap(self, source_image, target_image, reference_image=None, face_enhancer_enabled=True, **kwargs):
+    def swap(self, source_image, target_image, reference_image=None,
+                face_enhancer_enabled=True, expression_restorer_enabled=False, **kwargs):
+        # Build processors list based on enabled features
+        proc_list = ['face_swapper']
+        if face_enhancer_enabled:
+            proc_list.append('face_enhancer')
+        if expression_restorer_enabled:
+            proc_list.append('expression_restorer')
+        kwargs['processors'] = proc_list
         return (process_faces(source_image, target_image,
                               reference_tensor=reference_image,
                               face_enhancer_enabled=face_enhancer_enabled,
