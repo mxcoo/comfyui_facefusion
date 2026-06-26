@@ -17,6 +17,10 @@ def _check_gpu_onnxruntime():
             log.warning("  onnxruntime version: %s, providers: %s", _ort.__version__, _ort.get_available_providers())
             return False
         log.info("CUDAExecutionProvider is available: %s", _ort.get_available_providers())
+        # Known conflict: ComfyUI_LayerStyle_Advance has "onnxruntime" (CPU) in requirements.txt.
+        # If you see CPU onnxruntime overriding GPU, check:
+        #   G:\~~~Comfyui\python312\python.exe -m pip uninstall onnxruntime -y
+        #   G:\~~~Comfyui\python312\python.exe -m pip install "onnxruntime-gpu[cuda]==1.26.0"
         return True
     except Exception as _e:
         log.warning("onnxruntime check failed: %s", _e)
