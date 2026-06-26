@@ -9,11 +9,18 @@ log = logging.getLogger(__name__)
 # If the CPU-only onnxruntime package is installed alongside onnxruntime-gpu,
 # its files override the GPU version and CUDA becomes invisible.
 def _check_gpu_onnxruntime():
-    import onnxruntime as _ort
-    if "CUDAExecutionProvider" not in _ort.get_available_providers():
-        log.warning("CUDAExecutionProvider NOT found! CPU-only onnxruntime is overriding GPU.")
+    # Check if CUDA is visible to onnxruntime
+    try:
+        import onnxruntime as _ort
+        if "CUDAExecutionProvider" not in _ort.get_available_providers():
+            log.warning("CUDAExecutionProvider NOT found! CPU-only onnxruntime is overriding GPU.")
+            log.warning("  onnxruntime version: %s, providers: %s", _ort.__version__, _ort.get_available_providers())
+            return False
+        log.info("CUDAExecutionProvider is available: %s", _ort.get_available_providers())
+        return True
+    except Exception as _e:
+        log.warning("onnxruntime check failed: %s", _e)
         return False
-    return True
 
 
 
