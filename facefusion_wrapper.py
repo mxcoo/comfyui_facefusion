@@ -262,7 +262,7 @@ def apply_expression_restorer(target_frame, reference_frame=None):
     return result
 
 
-def process_faces(source_tensor, target_tensor, reference_tensor=None, face_enhancer_enabled=True, **kwargs):
+def process_faces(source_tensor, target_tensor, reference_tensor=None, face_enhancer_enabled=True, expression_restorer_enabled=False, **kwargs):
     configure_state(**kwargs)
 
     # Take first image of source batch as reference face
@@ -289,6 +289,8 @@ def process_faces(source_tensor, target_tensor, reference_tensor=None, face_enha
             current_frame = apply_face_swapper(source_frame, current_frame, ref_frame)
         if face_enhancer_enabled and "face_enhancer" in state_manager.get_item("processors"):
             current_frame = apply_face_enhancer(current_frame, ref_frame)
+        if expression_restorer_enabled and "expression_restorer" in state_manager.get_item("processors"):
+            current_frame = apply_expression_restorer(current_frame, ref_frame)
 
         results.append(vision_frame_to_tensor(current_frame))
 
@@ -351,4 +353,5 @@ class FaceFusionSwapNode:
         return (process_faces(source_image, target_image,
                               reference_tensor=reference_image,
                               face_enhancer_enabled=face_enhancer_enabled,
+                              expression_restorer_enabled=expression_restorer_enabled,
                               **kwargs),)
