@@ -4,6 +4,20 @@ import logging
 
 log = logging.getLogger(__name__)
 
+
+# === Crash-safe onnxruntime-gpu guard ===
+# If the CPU-only onnxruntime package is installed alongside onnxruntime-gpu,
+# its files override the GPU version and CUDA becomes invisible.
+def _check_gpu_onnxruntime():
+    import onnxruntime as _ort
+    if "CUDAExecutionProvider" not in _ort.get_available_providers():
+        log.warning("CUDAExecutionProvider NOT found! CPU-only onnxruntime is overriding GPU.")
+        return False
+    return True
+
+
+
+
 # === CUDA DLL path setup — must run BEFORE any onnxruntime import ===
 # PyTorch ships CUDA runtime DLLs (cudart64_12.dll, cublas64_12.dll, etc.)
 # in torch/lib/.  onnxruntime-gpu's CUDA provider DLL needs those DLLs on
