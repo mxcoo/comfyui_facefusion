@@ -9,19 +9,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger(__name__)
 
-from facefusion_wrapper import configure_state, tensor_to_vision_frame, vision_frame_to_tensor, apply_face_swapper, apply_face_enhancer
+from facefusion_wrapper import configure_state, tensor_to_vision_frame, vision_frame_to_tensor, apply_face_swapper, apply_face_enhancer, apply_expression_restorer
 
 
 def _one_frame(frame_bgr, src_bgr, ref_bgr, enh_enabled, expression_enabled):
     """Process a single frame — picklable for ThreadPoolExecutor."""
     c = frame_bgr.copy()
+    original = frame_bgr.copy()
     r = ref_bgr if ref_bgr is not None else frame_bgr.copy()
     c = apply_face_swapper(src_bgr, c, r)
     if enh_enabled:
         c = apply_face_enhancer(c, r)
     if expression_enabled:
         from facefusion_wrapper import apply_expression_restorer as _apply_er
-        c = _apply_er(c, r)
+        c = _apply_er(c, r, original_target_frame=original)
     return c
 
 

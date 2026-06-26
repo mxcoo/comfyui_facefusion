@@ -247,14 +247,21 @@ def apply_face_enhancer(target_frame, reference_frame=None):
     return result
 
 
-def apply_expression_restorer(target_frame, reference_frame=None):
+def apply_expression_restorer(target_frame, reference_frame=None, original_target_frame=None):
+    # Restore expression from original_target_frame onto target_frame.
+    # expression_restorer needs:
+    # - target_vision_frame: the ORIGINAL unmodified frame (to detect faces + extract expression)
+    # - temp_vision_frame: current processed frame (after swap/enhance) to apply expression to
+    # If original_target_frame is not provided, this is a no-op (returns target_frame unchanged).
     from facefusion.processors.modules.expression_restorer.core import process_frame as restorer_process
+    if original_target_frame is None:
+        return target_frame
     mask = __import__("numpy").zeros(target_frame.shape[:2], dtype=__import__("numpy").uint8)
-    ref = reference_frame if reference_frame is not None else target_frame
+    ref = reference_frame if reference_frame is not None else original_target_frame
     inputs = {
         "reference_vision_frame": ref,
-        "source_vision_frames": [ref],
-        "target_vision_frame": target_frame,
+        "source_vision_frames": [original_target_frame],
+        "target_vision_frame": original_target_frame,
         "temp_vision_frame": target_frame.copy(),
         "temp_vision_mask": mask
     }
@@ -290,7 +297,7 @@ def process_faces(source_tensor, target_tensor, reference_tensor=None, face_enha
         if face_enhancer_enabled and "face_enhancer" in state_manager.get_item("processors"):
             current_frame = apply_face_enhancer(current_frame, ref_frame)
         if expression_restorer_enabled and "expression_restorer" in state_manager.get_item("processors"):
-            current_frame = apply_expression_restorer(current_frame, ref_frame)
+            current_frame = apply_expression_restorer(current_frame, ref_frame, original_target_frame=target_frame)
 
         results.append(vision_frame_to_tensor(current_frame))
 
